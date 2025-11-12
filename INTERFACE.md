@@ -135,6 +135,66 @@ curve = build_yield_curve_from_swaps(
 
 ---
 
+## `montecarlo_ir.market_data.vol_surface`
+
+Volatility surface for caplets and swaptions.
+
+### Types
+
+**`InterpolationMethod`**: `"linear"` | `"flat"`  
+**`ExtrapolationMethod`**: `"flat"` | `"linear"`
+
+### Class
+
+**`VolatilitySurface`** (dataclass, frozen)
+- `valuation_date: date`
+- `expiry_times: tuple[float, ...]` (years from valuation)
+- `tenor_times: tuple[float, ...]` (years)
+- `volatility_matrix: tuple[tuple[float, ...], ...]` (expiry x tenor)
+- `interpolation: InterpolationMethod = "linear"`
+- `extrapolation: ExtrapolationMethod = "flat"`
+- `day_count: DayCountConvention = ACT_365`
+
+**Methods:**
+- `volatility(expiry_date: date, tenor_years: float) -> float`
+- `volatility_at_times(expiry_time: float, tenor_time: float) -> float`
+
+### Helper Functions
+
+**`build_volatility_surface_from_matrix(...) -> VolatilitySurface`**
+- Build surface from expiry dates, tenor years, and volatility matrix
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.market_data.vol_surface import (
+    VolatilitySurface, build_volatility_surface_from_matrix
+)
+
+# Direct construction
+surface = VolatilitySurface(
+    valuation_date=date(2024, 1, 1),
+    expiry_times=(0.25, 0.5, 1.0),
+    tenor_times=(1.0, 2.0, 5.0),
+    volatility_matrix=((0.15, 0.16, 0.17), (0.16, 0.17, 0.18), (0.17, 0.18, 0.19)),
+)
+
+# Query volatility
+vol = surface.volatility(date(2024, 4, 1), 1.0)  # Using dates
+vol = surface.volatility_at_times(0.25, 1.0)  # Using times
+
+# Build from matrix
+surface = build_volatility_surface_from_matrix(
+    valuation_date=date(2024, 1, 1),
+    expiry_dates=(date(2024, 4, 1), date(2024, 7, 1)),
+    tenor_years=(1.0, 2.0),
+    volatility_matrix=((0.15, 0.16), (0.16, 0.17)),
+)
+```
+
+---
+
 ## Error Handling
 
-- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve inputs
+- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve/surface inputs
