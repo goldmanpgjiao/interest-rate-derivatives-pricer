@@ -195,6 +195,61 @@ surface = build_volatility_surface_from_matrix(
 
 ---
 
+## `montecarlo_ir.models.hull_white`
+
+Hull-White 1-Factor interest rate model.
+
+### Types
+
+**`DiscretizationScheme`**: `"exact"` | `"euler"`
+
+### Class
+
+**`HullWhite1F`** (dataclass, frozen)
+- `yield_curve: YieldCurve`
+- `mean_reversion: float` (a, positive)
+- `volatility: float` (σ, positive)
+- `scheme: DiscretizationScheme = "exact"`
+- `day_count: DayCountConvention = ACT_365`
+
+**Methods:**
+- `simulate_short_rate_path(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray`
+- `bond_price(t: float, T: float, r_t: float) -> float`
+- `discount_factor(t: float, T: float, r_t: float) -> float`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.models.hull_white import HullWhite1F
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+import numpy as np
+
+# Create yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1), date(2026, 1, 1)),
+    zero_rates=(0.02, 0.025),
+)
+
+# Create model
+model = HullWhite1F(
+    yield_curve=curve,
+    mean_reversion=0.1,
+    volatility=0.01,
+    scheme="exact",
+)
+
+# Simulate short rate path
+times = [0.0, 0.25, 0.5, 1.0]
+rates = model.simulate_short_rate_path(times)
+
+# Calculate bond price
+bond_price = model.bond_price(t=0.0, T=1.0, r_t=0.02)
+```
+
+---
+
 ## Error Handling
 
-- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve/surface inputs
+- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve/surface/model inputs
