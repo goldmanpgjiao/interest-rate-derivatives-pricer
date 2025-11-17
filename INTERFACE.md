@@ -250,6 +250,432 @@ bond_price = model.bond_price(t=0.0, T=1.0, r_t=0.02)
 
 ---
 
+## `montecarlo_ir.models.lmm`
+
+LIBOR Market Model for forward rate simulation.
+
+### Types
+
+**`DiscretizationScheme`**: `"euler"` | `"log_euler"`  
+**`NumeraireMeasure`**: `"spot"` | `"terminal"`
+
+### Class
+
+**`LIBORMarketModel`** (dataclass, frozen)
+- `yield_curve: YieldCurve`
+- `tenor_structure: tuple[date, ...]` (T_0, T_1, ..., T_N)
+- `volatilities: tuple[float, ...] | tuple[tuple[float, ...], ...]` (σ_i or σ_i(t))
+- `correlation_matrix: tuple[tuple[float, ...], ...] | None = None`
+- `scheme: DiscretizationScheme = "log_euler"`
+- `measure: NumeraireMeasure = "spot"`
+- `day_count: DayCountConvention = ACT_365`
+
+**Methods:**
+- `simulate_forward_rates(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray`
+- `discount_factor(t: float, T: float, forward_rates: np.ndarray) -> float`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.models.lmm import LIBORMarketModel
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+import numpy as np
+
+# Create yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1), date(2026, 1, 1)),
+    zero_rates=(0.02, 0.025),
+)
+
+# Create LMM model
+model = LIBORMarketModel(
+    yield_curve=curve,
+    tenor_structure=(date(2024, 1, 1), date(2025, 1, 1), date(2026, 1, 1)),
+    volatilities=(0.15, 0.16),
+    correlation_matrix=((1.0, 0.5), (0.5, 1.0)),
+    scheme="log_euler",
+    measure="spot",
+)
+
+# Simulate forward rates
+times = [0.0, 0.25, 0.5, 1.0]
+rates = model.simulate_forward_rates(times)  # Shape: [n_times, n_rates]
+```
+
+---
+
+## `montecarlo_ir.pricing.mc_engine`
+
+Monte Carlo pricing engine for interest rate derivatives.
+
+### Classes
+
+**`MonteCarloEngine`** (dataclass, frozen)
+- `model: HullWhite1F | LIBORMarketModel`
+- `num_paths: int = 10000`
+- `seed: int | None = None`
+- `use_antithetic: bool = False`
+- `day_count: DayCountConvention = ACT_365`
+
+**Methods:**
+- `price(payoff_fn: Callable, simulation_times: list[float] | np.ndarray, valuation_date: date, return_paths: bool = False) -> MonteCarloResult`
+- `compute_discount_factors(paths: np.ndarray, times: np.ndarray, valuation_date: date) -> np.ndarray`
+
+**`MonteCarloResult`** (dataclass, frozen)
+- `price: float`
+- `standard_error: float`
+- `num_paths: int`
+- `paths: np.ndarray | None = None`
+
+### Functions
+
+**`align_simulation_grid(valuation_date: date, important_dates: list[date], min_step_size: float = 0.01, max_step_size: float = 0.25) -> list[float]`**
+- Create simulation grid aligned with important dates
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.pricing.mc_engine import MonteCarloEngine, align_simulation_grid
+from montecarlo_ir.models.hull_white import HullWhite1F
+import numpy as np
+
+# Create model and engine
+model = HullWhite1F(yield_curve=curve, mean_reversion=0.1, volatility=0.01)
+engine = MonteCarloEngine(model=model, num_paths=10000, use_antithetic=True)
+
+# Define payoff function
+def payoff_fn(rates: np.ndarray, times: np.ndarray) -> float:
+    return max(0.0, rates[-1] - 0.02)
+
+# Price derivative
+times = [0.0, 0.25, 0.5, 1.0]
+result = engine.price(
+    payoff_fn=payoff_fn,
+    simulation_times=times,
+    valuation_date=date(2024, 1, 1),
+)
+
+print(f"Price: {result.price:.6f} ± {result.standard_error:.6f}")
+
+# Align grid with important dates
+grid = align_simulation_grid(
+    valuation_date=date(2024, 1, 1),
+    important_dates=[date(2024, 6, 1), date(2025, 1, 1)],
+)
+```
+
+---
+
+## `montecarlo_ir.calibration.hw_calibrator`
+
+Hull-White model calibration to market instruments.
+
+### Classes
+
+**`CalibrationInstrument`** (dataclass, frozen)
+- `expiry_date: date`
+- `maturity_date: date`
+- `strike: float`
+- `market_price: float`
+- `instrument_type: str` (`"caplet"` or `"swaption"`)
+
+**`CalibrationResult`** (dataclass, frozen)
+- `mean_reversion: float`
+- `volatility: float`
+- `calibrated_model: HullWhite1F`
+- `calibration_error: float` (RMSE)
+- `num_iterations: int`
+
+### Functions
+
+**`calibrate_hull_white_to_instruments(yield_curve: YieldCurve, instruments: list[CalibrationInstrument], initial_mean_reversion: float = 0.1, initial_volatility: float = 0.01, *, day_count: DayCountConvention = ACT_365, num_paths: int = 5000, seed: int | None = None) -> CalibrationResult`**
+- Calibrate Hull-White model to market instruments (caplets/swaptions)
+
+**`calibrate_hull_white_to_vol_surface(yield_curve: YieldCurve, vol_surface: VolatilitySurface, caplet_strikes: list[float] | tuple[float, ...], *, day_count: DayCountConvention = ACT_365, num_paths: int = 5000, seed: int | None = None) -> CalibrationResult`**
+- Calibrate Hull-White to caplet volatility surface
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.calibration.hw_calibrator import (
+    CalibrationInstrument,
+    calibrate_hull_white_to_instruments,
+    calibrate_hull_white_to_vol_surface,
+)
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+from montecarlo_ir.market_data.vol_surface import VolatilitySurface
+
+# Create yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1), date(2026, 1, 1)),
+    zero_rates=(0.02, 0.025),
+)
+
+# Calibrate to instruments
+instruments = [
+    CalibrationInstrument(
+        expiry_date=date(2024, 4, 1),
+        maturity_date=date(2024, 7, 1),
+        strike=0.02,
+        market_price=0.001,
+        instrument_type="caplet",
+    )
+]
+
+result = calibrate_hull_white_to_instruments(
+    yield_curve=curve,
+    instruments=instruments,
+    initial_mean_reversion=0.1,
+    initial_volatility=0.01,
+    num_paths=5000,
+)
+
+# Use calibrated model
+model = result.calibrated_model
+print(f"Calibrated a={result.mean_reversion:.4f}, σ={result.volatility:.4f}")
+
+# Calibrate to volatility surface
+vol_surface = VolatilitySurface(
+    valuation_date=date(2024, 1, 1),
+    expiry_times=(0.25, 0.5, 1.0),
+    tenor_times=(0.25,),
+    volatility_matrix=((0.15,), (0.16,), (0.17,)),
+)
+
+result = calibrate_hull_white_to_vol_surface(
+    yield_curve=curve,
+    vol_surface=vol_surface,
+    caplet_strikes=(0.02, 0.02, 0.02),
+    num_paths=5000,
+)
+```
+
+---
+
+## `montecarlo_ir.products.interest_rate_swap`
+
+Interest Rate Swap (IRS) product implementation.
+
+### Types
+
+**`SwapType`**: `"payer"` | `"receiver"`
+
+### Classes
+
+**`InterestRateSwap`** (dataclass, frozen)
+- `valuation_date: date`
+- `start_date: date`
+- `maturity_date: date`
+- `fixed_rate: float` (annual)
+- `notional: float`
+- `swap_type: SwapType = "payer"`
+- `fixed_frequency: str = "6M"`
+- `floating_frequency: str = "6M"`
+- `fixed_day_count: DayCountConvention = ACT_365`
+- `floating_day_count: DayCountConvention = ACT_360`
+- `business_day_rule: BusinessDayRule = MODIFIED_FOLLOWING`
+- `calendar: list[date] | None = None`
+
+**Methods:**
+- `get_fixed_leg_cashflows() -> list[Cashflow]`
+- `get_floating_leg_cashflows() -> list[Cashflow]`
+- `payoff(yield_curve: YieldCurve, floating_rates: dict[date, float] | None = None) -> float`
+- `payoff_mc(rates: np.ndarray, times: np.ndarray, yield_curve: YieldCurve) -> float`
+
+**`Cashflow`** (dataclass, frozen)
+- `payment_date: date`
+- `reset_date: date | None`
+- `notional: float`
+- `rate: float`
+- `day_count: DayCountConvention`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.products.interest_rate_swap import InterestRateSwap
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+import numpy as np
+
+# Create swap
+swap = InterestRateSwap(
+    valuation_date=date(2024, 1, 1),
+    start_date=date(2024, 1, 1),
+    maturity_date=date(2025, 1, 1),
+    fixed_rate=0.02,
+    notional=1000000.0,
+    swap_type="payer",
+    fixed_frequency="6M",
+    floating_frequency="6M",
+)
+
+# Get cashflows
+fixed_cfs = swap.get_fixed_leg_cashflows()
+floating_cfs = swap.get_floating_leg_cashflows()
+
+# Calculate payoff using yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1),),
+    zero_rates=(0.02,),
+)
+pv = swap.payoff(curve)
+
+# Calculate payoff for MC path
+times = np.array([0.0, 0.5, 1.0])
+rates = np.array([0.02, 0.025, 0.03])
+payoff = swap.payoff_mc(rates, times, curve)
+```
+
+---
+
+## `montecarlo_ir.products.cap_floor`
+
+Cap and Floor products for interest rate protection.
+
+### Types
+
+**`CapFloorType`**: `"cap"` | `"floor"`
+
+### Classes
+
+**`CapFloor`** (dataclass, frozen)
+- `valuation_date: date`
+- `start_date: date`
+- `maturity_date: date`
+- `strike: float` (annual)
+- `notional: float`
+- `cap_floor_type: CapFloorType = "cap"`
+- `frequency: str = "3M"`
+- `day_count: DayCountConvention = ACT_360`
+- `business_day_rule: BusinessDayRule = MODIFIED_FOLLOWING`
+- `calendar: list[date] | None = None`
+
+**Methods:**
+- `get_caplets_floorlets() -> list[CapletFloorlet]`
+- `payoff(yield_curve: YieldCurve, floating_rates: dict[date, float] | None = None) -> float`
+- `payoff_mc(rates: np.ndarray, times: np.ndarray, yield_curve: YieldCurve) -> float`
+
+**`CapletFloorlet`** (dataclass, frozen)
+- `reset_date: date`
+- `payment_date: date`
+- `strike: float`
+- `notional: float`
+- `day_count: DayCountConvention`
+- `option_type: CapFloorType`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.products.cap_floor import CapFloor
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+import numpy as np
+
+# Create cap
+cap = CapFloor(
+    valuation_date=date(2024, 1, 1),
+    start_date=date(2024, 1, 1),
+    maturity_date=date(2025, 1, 1),
+    strike=0.02,
+    notional=1000000.0,
+    cap_floor_type="cap",
+    frequency="3M",
+)
+
+# Get caplets
+caplets = cap.get_caplets_floorlets()
+
+# Calculate payoff using yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1),),
+    zero_rates=(0.02,),
+)
+pv = cap.payoff(curve)
+
+# Calculate payoff for MC path
+times = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+rates = np.array([0.02, 0.025, 0.03, 0.025, 0.02])
+payoff = cap.payoff_mc(rates, times, curve)
+```
+
+---
+
+## `montecarlo_ir.products.european_swaption`
+
+European Swaption product.
+
+### Types
+
+**`SwaptionType`**: `"payer"` | `"receiver"`  
+**`SettlementType`**: `"physical"` | `"cash"`
+
+### Class
+
+**`EuropeanSwaption`** (dataclass, frozen)
+- `valuation_date: date`
+- `expiry_date: date`
+- `swap_start_date: date`
+- `swap_maturity_date: date`
+- `strike: float` (annual)
+- `notional: float`
+- `swaption_type: SwaptionType = "payer"`
+- `settlement_type: SettlementType = "physical"`
+- `swap_fixed_frequency: str = "6M"`
+- `swap_floating_frequency: str = "6M"`
+- `swap_fixed_day_count: DayCountConvention = ACT_365`
+- `swap_floating_day_count: DayCountConvention = ACT_360`
+
+**Methods:**
+- `get_underlying_swap() -> InterestRateSwap`
+- `payoff(yield_curve: YieldCurve, swap_value_at_expiry: float | None = None) -> float`
+- `payoff_mc(rates: np.ndarray, times: np.ndarray, yield_curve: YieldCurve) -> float`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.products.european_swaption import EuropeanSwaption
+from montecarlo_ir.market_data.yield_curve import build_yield_curve_from_zero_rates
+import numpy as np
+
+# Create swaption
+swaption = EuropeanSwaption(
+    valuation_date=date(2024, 1, 1),
+    expiry_date=date(2024, 6, 1),
+    swap_start_date=date(2024, 7, 1),
+    swap_maturity_date=date(2025, 6, 1),
+    strike=0.02,
+    notional=1000000.0,
+    swaption_type="payer",
+    settlement_type="physical",
+)
+
+# Get underlying swap
+underlying_swap = swaption.get_underlying_swap()
+
+# Calculate payoff using yield curve
+curve = build_yield_curve_from_zero_rates(
+    valuation_date=date(2024, 1, 1),
+    pillar_dates=(date(2025, 1, 1),),
+    zero_rates=(0.02,),
+)
+pv = swaption.payoff(curve)
+
+# Calculate payoff for MC path
+times = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+rates = np.array([0.02, 0.025, 0.03, 0.025, 0.02])
+payoff = swaption.payoff_mc(rates, times, curve)
+```
+
+---
+
 ## Error Handling
 
-- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve/surface/model inputs
+- **`ValueError`**: Invalid date order, unsupported convention/rule/frequency, invalid curve/surface/model inputs, invalid MC parameters, invalid calibration inputs, invalid swap/cap/swaption parameters
