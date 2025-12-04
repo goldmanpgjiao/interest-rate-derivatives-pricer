@@ -195,6 +195,34 @@ surface = build_volatility_surface_from_matrix(
 
 ---
 
+## `montecarlo_ir.models.base`
+
+Base interface for all interest rate models.
+
+### Protocol
+
+**`InterestRateModel`** (Protocol)
+- `yield_curve: YieldCurve`
+- `simulate_path(times: np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray`
+- `discount_factor(t: float, T: float, state: float | np.ndarray) -> float`
+- `bond_price(t: float, T: float, state: float | np.ndarray) -> float`
+
+All models (`HullWhite1F`, `LIBORMarketModel`, etc.) implement this protocol, enabling model-agnostic pricers.
+
+### Quick Examples
+
+```python
+from montecarlo_ir.models.base import InterestRateModel
+from montecarlo_ir.models.hull_white import HullWhite1F
+from montecarlo_ir.pricing.product_pricers import SwapPricer
+
+# Any model implementing InterestRateModel works with pricers
+model: InterestRateModel = HullWhite1F(...)
+pricer = SwapPricer(model=model, num_paths=10000)
+```
+
+---
+
 ## `montecarlo_ir.models.hull_white`
 
 Hull-White 1-Factor interest rate model.
@@ -213,9 +241,10 @@ Hull-White 1-Factor interest rate model.
 - `day_count: DayCountConvention = ACT_365`
 
 **Methods:**
-- `simulate_short_rate_path(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray`
-- `bond_price(t: float, T: float, r_t: float) -> float`
-- `discount_factor(t: float, T: float, r_t: float) -> float`
+- `simulate_path(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray` (InterestRateModel protocol)
+- `simulate_short_rate_path(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray` (legacy)
+- `bond_price(t: float, T: float, state: float | np.ndarray | None = None, *, r_t: float | None = None) -> float`
+- `discount_factor(t: float, T: float, state: float | np.ndarray | None = None, *, r_t: float | None = None) -> float`
 
 ### Quick Examples
 
@@ -271,8 +300,10 @@ LIBOR Market Model for forward rate simulation.
 - `day_count: DayCountConvention = ACT_365`
 
 **Methods:**
-- `simulate_forward_rates(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray`
-- `discount_factor(t: float, T: float, forward_rates: np.ndarray) -> float`
+- `simulate_path(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray` (InterestRateModel protocol)
+- `simulate_forward_rates(times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None) -> np.ndarray` (legacy)
+- `discount_factor(t: float, T: float, state: float | np.ndarray | None = None, *, forward_rates: np.ndarray | None = None) -> float`
+- `bond_price(t: float, T: float, state: float | np.ndarray | None = None, *, forward_rates: np.ndarray | None = None) -> float` (InterestRateModel protocol)
 
 ### Quick Examples
 
@@ -313,7 +344,7 @@ Monte Carlo pricing engine for interest rate derivatives.
 ### Classes
 
 **`MonteCarloEngine`** (dataclass, frozen)
-- `model: HullWhite1F | LIBORMarketModel`
+- `model: InterestRateModel` (any model implementing the protocol)
 - `num_paths: int = 10000`
 - `seed: int | None = None`
 - `use_antithetic: bool = False`
@@ -672,6 +703,114 @@ pv = swaption.payoff(curve)
 times = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
 rates = np.array([0.02, 0.025, 0.03, 0.025, 0.02])
 payoff = swaption.payoff_mc(rates, times, curve)
+```
+
+---
+
+## `montecarlo_ir.pricing.product_pricers`
+
+Product pricers that connect products to the Monte Carlo engine.
+
+### Classes
+
+**`SwapPricer`** (dataclass, frozen)
+- `model: InterestRateModel` (any model implementing the protocol)
+- `num_paths: int = 10000`
+- `seed: int | None = None`
+- `use_antithetic: bool = False`
+
+**Methods:**
+- `price(swap: InterestRateSwap) -> MonteCarloResult`
+
+**`CapFloorPricer`** (dataclass, frozen)
+- `model: InterestRateModel` (any model implementing the protocol)
+- `num_paths: int = 10000`
+- `seed: int | None = None`
+- `use_antithetic: bool = False`
+
+**Methods:**
+- `price(cap_floor: CapFloor) -> MonteCarloResult`
+
+**`EuropeanSwaptionPricer`** (dataclass, frozen)
+- `model: InterestRateModel` (any model implementing the protocol)
+- `num_paths: int = 10000`
+- `seed: int | None = None`
+- `use_antithetic: bool = False`
+
+**Methods:**
+- `price(swaption: EuropeanSwaption) -> MonteCarloResult`
+
+### Quick Examples
+
+```python
+from datetime import date
+from montecarlo_ir.pricing.product_pricers import SwapPricer, CapFloorPricer, EuropeanSwaptionPricer
+from montecarlo_ir.models.hull_white import HullWhite1F
+from montecarlo_ir.products.interest_rate_swap import InterestRateSwap
+from montecarlo_ir.products.cap_floor import CapFloor
+from montecarlo_ir.products.european_swaption import EuropeanSwaption
+
+# Create model
+model = HullWhite1F(yield_curve=curve, mean_reversion=0.1, volatility=0.01)
+
+# Price swap
+swap = InterestRateSwap(...)
+swap_pricer = SwapPricer(model=model, num_paths=10000, seed=42)
+swap_result = swap_pricer.price(swap)
+print(f"Swap price: {swap_result.price:.6f} ± {swap_result.standard_error:.6f}")
+
+# Price cap
+cap = CapFloor(...)
+cap_pricer = CapFloorPricer(model=model, num_paths=10000, seed=42)
+cap_result = cap_pricer.price(cap)
+print(f"Cap price: {cap_result.price:.6f} ± {cap_result.standard_error:.6f}")
+
+# Price swaption
+swaption = EuropeanSwaption(...)
+swaption_pricer = EuropeanSwaptionPricer(model=model, num_paths=10000, seed=42)
+swaption_result = swaption_pricer.price(swaption)
+print(f"Swaption price: {swaption_result.price:.6f} ± {swaption_result.standard_error:.6f}")
+```
+
+---
+
+## `montecarlo_ir.utils.model_comparison`
+
+Model comparison utilities for comparing pricing across different models.
+
+### Classes
+
+**`ComparisonResult`** (dataclass, frozen)
+- `model_names: tuple[str, ...]`
+- `prices: tuple[float, ...]`
+- `standard_errors: tuple[float, ...]`
+- `num_paths: int`
+- `statistics: dict[str, float]` (mean, std, min, max, range, relative_std)
+
+### Functions
+
+**`compare_models(pricer_factory: Callable[[InterestRateModel], Callable], product: object, models: list[tuple[InterestRateModel, str]]) -> ComparisonResult`**
+- Compare pricing results across multiple models
+- Returns statistics on price differences
+
+### Quick Examples
+
+```python
+from montecarlo_ir.utils.model_comparison import compare_models
+from montecarlo_ir.pricing.product_pricers import SwapPricer
+from montecarlo_ir.models.hull_white import HullWhite1F
+
+def create_pricer(model: InterestRateModel):
+    return SwapPricer(model=model, num_paths=5000, seed=42).price
+
+models = [
+    (HullWhite1F(yield_curve=curve, mean_reversion=0.1, volatility=0.01), "HW1F_a=0.1"),
+    (HullWhite1F(yield_curve=curve, mean_reversion=0.15, volatility=0.015), "HW1F_a=0.15"),
+]
+
+result = compare_models(create_pricer, swap, models)
+print(f"Mean price: {result.statistics['mean']:.6f}")
+print(f"Price range: {result.statistics['range']:.6f}")
 ```
 
 ---

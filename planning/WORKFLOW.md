@@ -290,6 +290,148 @@ uv pip install -e .
 
 ---
 
+## Phase 8: Model Interface Refactoring (NEW)
+
+### Objective
+Create a model-agnostic interface that enables pricers to work with any interest rate model, facilitating model comparison.
+
+### Step 1: Create Base Model Interface
+
+```bash
+# Create models/base.py with InterestRateModel protocol
+# Define standardized interface for all models
+```
+
+**Key Requirements**:
+- Protocol/ABC that all models must implement
+- Standardized method signatures
+- Type hints for state vectors (1D for 1F, 2D for 2F, etc.)
+- Documentation of expected behavior
+
+### Step 2: Refactor Existing Models
+
+```bash
+# Update hull_white.py to implement InterestRateModel
+# Update lmm.py to implement InterestRateModel
+# Ensure backward compatibility
+```
+
+**Changes Required**:
+- Rename `simulate_short_rate_path` → `simulate_path` (or add alias)
+- Standardize `discount_factor` signature
+- Update state representation
+- Add protocol compliance checks
+
+### Step 3: Refactor Pricers
+
+```bash
+# Update product_pricers.py
+# Replace specific model types with InterestRateModel protocol
+# Update mc_engine.py similarly
+```
+
+**Changes Required**:
+- Change `model: HullWhite1F | LIBORMarketModel` → `model: InterestRateModel`
+- Update type hints throughout
+- Ensure pricers work with any compliant model
+
+### Step 4: Add Model Comparison Utilities
+
+```bash
+# Create utils/model_comparison.py
+# Implement compare_models() function
+# Create ComparisonResult dataclass
+```
+
+### Step 5: Update Tests
+
+```bash
+# Add tests for protocol compliance
+# Test pricers with different models
+# Add model comparison tests
+```
+
+---
+
+## Phase 9: 2-Factor Models Implementation
+
+### Step 1: Implement Hull-White 2F
+
+```bash
+# Create models/hull_white_2f.py
+# Implement 2-factor SDE
+# Add state vector handling [r(t), x(t)]
+# Implement bond pricing formulas
+```
+
+**Mathematical Foundation**:
+- SDE system with correlation
+- Analytical bond pricing (if available)
+- Exact and Euler discretization
+
+### Step 2: Implement G2++
+
+```bash
+# Create models/g2pp.py
+# Implement Gaussian 2-factor model
+# State vector: [x(t), y(t)]
+# r(t) = x(t) + y(t) + φ(t)
+```
+
+**Key Features**:
+- Analytical bond pricing
+- Correlation structure
+- Calibration support
+
+### Step 3: Add Calibration
+
+```bash
+# Create calibration/hw2f_calibrator.py
+# Create calibration/g2pp_calibrator.py
+# 5-6 parameter optimization
+```
+
+---
+
+## Phase 10: Quadratic Models Implementation
+
+### Step 1: Implement Quadratic Gaussian
+
+```bash
+# Create models/quadratic_gaussian.py
+# Implement state-dependent volatility
+# Ensure non-negativity
+# Bond pricing (analytical or numerical)
+```
+
+**Key Features**:
+- Power parameter for volatility
+- Non-negative rates
+- Flexible volatility structure
+
+---
+
+## Phase 11: Model Comparison Framework
+
+### Step 1: Create Comparison Utilities
+
+```bash
+# Create utils/model_comparison.py
+# Implement comparison functions
+# Statistical analysis tools
+```
+
+### Step 2: Create Comparison Notebook
+
+```bash
+# Create notebooks/model_comparison.ipynb
+# Compare all models side-by-side
+# Visualizations
+# Sensitivity analysis
+```
+
+---
+
 ## Recommended Development Practices
 
 1. **Type Hints**: Always use type hints for function parameters and return types
@@ -297,6 +439,9 @@ uv pip install -e .
 3. **Testing**: Write tests alongside code (TDD approach)
 4. **Commits**: Make frequent, atomic commits
 5. **Code Review**: Review code before merging to main branch
+6. **Model Interface**: All new models must implement `InterestRateModel` protocol
+7. **Backward Compatibility**: Maintain compatibility when refactoring existing code
+8. **Model Comparison**: Test pricers with multiple models to ensure consistency
 6. **Documentation**: Update documentation as you develop
 
 ---

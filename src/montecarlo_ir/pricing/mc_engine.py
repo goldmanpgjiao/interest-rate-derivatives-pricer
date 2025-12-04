@@ -13,25 +13,8 @@ from typing import Callable, Protocol
 import numpy as np
 
 from montecarlo_ir.market_data.yield_curve import YieldCurve
-from montecarlo_ir.models.hull_white import HullWhite1F
-from montecarlo_ir.models.lmm import LIBORMarketModel
+from montecarlo_ir.models.base import InterestRateModel
 from montecarlo_ir.utils.date_helpers import DayCountConvention, year_fraction
-
-
-class InterestRateModel(Protocol):
-    """Protocol for interest rate models."""
-
-    yield_curve: YieldCurve
-
-    def simulate_short_rate_path(
-        self, times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None
-    ) -> np.ndarray:
-        """Simulate short rate path."""
-        ...
-
-    def discount_factor(self, t: float, T: float, r_t: float) -> float:
-        """Calculate discount factor."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -59,14 +42,14 @@ class MonteCarloEngine:
     payoffs with proper discounting.
 
     Attributes:
-        model: Interest rate model (HullWhite1F or LIBORMarketModel).
+        model: Interest rate model (any model implementing InterestRateModel protocol).
         num_paths: Number of Monte Carlo paths to simulate.
         seed: Random seed for reproducibility.
         use_antithetic: Whether to use antithetic variates.
         day_count: Day count convention for time calculations.
     """
 
-    model: HullWhite1F | LIBORMarketModel
+    model: InterestRateModel
     num_paths: int = 10000
     seed: int | None = None
     use_antithetic: bool = False
@@ -110,14 +93,17 @@ class MonteCarloEngine:
         if self.use_antithetic:
             n_paths_base = (self.num_paths + 1) // 2
 
-        # Generate random shocks
-        if isinstance(self.model, HullWhite1F):
-            n_times = len(times_array)
-            shocks = np.random.standard_normal((n_paths_base, n_times - 1))
-        else:  # LIBORMarketModel
-            n_times = len(times_array)
+        # Generate random shocks - need to determine shape from model
+        n_times = len(times_array)
+        # Try to infer shock shape from model type
+        # For now, use a heuristic: check if model has tenor_structure (LMM) or not
+        if hasattr(self.model, "tenor_structure"):
+            # LMM-like model: need shocks for each forward rate
             n_rates = len(self.model.tenor_structure) - 1
             shocks = np.random.standard_normal((n_paths_base, n_times - 1, n_rates))
+        else:
+            # Short-rate model: 1D shocks
+            shocks = np.random.standard_normal((n_paths_base, n_times - 1))
 
         # Apply antithetic if requested
         if self.use_antithetic:
@@ -157,11 +143,8 @@ class MonteCarloEngine:
     def _simulate_path(
         self, times: np.ndarray, shocks: np.ndarray
     ) -> np.ndarray:
-        """Simulate a single path."""
-        if isinstance(self.model, HullWhite1F):
-            return self.model.simulate_short_rate_path(times, shocks)
-        else:  # LIBORMarketModel
-            return self.model.simulate_forward_rates(times, shocks)
+        """Simulate a single path using model's simulate_path method."""
+        return self.model.simulate_path(times, shocks)
 
     def compute_discount_factors(
         self, paths: np.ndarray, times: np.ndarray, valuation_date: date
@@ -179,7 +162,10 @@ class MonteCarloEngine:
         n_paths, n_times = paths.shape[0], paths.shape[1]
         dfs = np.ones((n_paths, n_times))
 
-        if isinstance(self.model, HullWhite1F):
+        # Determine if this is a short-rate model (1D paths) or forward-rate model (2D paths)
+        is_short_rate_model = paths.ndim == 2 and paths.shape[1] == n_times
+
+        if is_short_rate_model:
             # Short rate model: integrate rates to get discount factors
             for path_idx in range(n_paths):
                 rates = paths[path_idx]
@@ -190,13 +176,13 @@ class MonteCarloEngine:
                     dt = t_curr - t_prev
                     avg_rate = 0.5 * (rates[t_idx - 1] + rates[t_idx])
                     dfs[path_idx, t_idx] = dfs[path_idx, t_idx - 1] * np.exp(-avg_rate * dt)
-        else:  # LIBORMarketModel
-            # Forward rate model: use forward rates to build discount factors
+        else:
+            # Forward rate model or multi-factor: use model's discount_factor method
+            # For simplicity, use yield curve (can be enhanced to use model's discount_factor)
             for path_idx in range(n_paths):
-                forward_rates = paths[path_idx]  # [n_times, n_rates]
                 for t_idx in range(n_times):
                     t = times[t_idx]
-                    # Use yield curve for discounting (model discount factor needs rates)
+                    # Use yield curve for discounting
                     dfs[path_idx, t_idx] = self.model.yield_curve.discount_factor(
                         self._time_to_date(t, valuation_date)
                     )

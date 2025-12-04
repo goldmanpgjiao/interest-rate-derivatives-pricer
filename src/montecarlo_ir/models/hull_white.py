@@ -14,6 +14,7 @@ from typing import Literal
 import numpy as np
 
 from montecarlo_ir.market_data.yield_curve import YieldCurve
+from montecarlo_ir.models.base import InterestRateModel  # noqa: F401 - Protocol for type checking
 from montecarlo_ir.utils.date_helpers import DayCountConvention
 
 DiscretizationScheme = Literal["exact", "euler"]
@@ -53,6 +54,21 @@ class HullWhite1F:
         if self.volatility <= 0.0:
             raise ValueError("volatility must be positive.")
 
+    def simulate_path(
+        self, times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Simulate an interest rate path (InterestRateModel protocol).
+
+        Args:
+            times: Array of time points (years from valuation_date).
+            random_shocks: Optional array of random shocks (standard normal).
+                         If None, generates random shocks.
+
+        Returns:
+            Array of short rates at each time point [n_times].
+        """
+        return self.simulate_short_rate_path(times, random_shocks)
+
     def simulate_short_rate_path(
         self, times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None
     ) -> np.ndarray:
@@ -82,13 +98,18 @@ class HullWhite1F:
         else:
             return self._simulate_euler(times_array, r0, random_shocks)
 
-    def bond_price(self, t: float, T: float, r_t: float) -> float:
+    def bond_price(
+        self, t: float, T: float, state: float | np.ndarray | None = None, *, r_t: float | None = None
+    ) -> float:
         """Calculate zero-coupon bond price P(t, T) given short rate at time t.
+
+        Supports both protocol interface (state parameter) and legacy interface (r_t parameter).
 
         Args:
             t: Current time (years from valuation_date).
             T: Bond maturity time (years from valuation_date).
-            r_t: Short rate at time t.
+            state: Current state (short rate) at time t. For 1-factor model, this is a scalar.
+            r_t: Legacy parameter - short rate at time t (deprecated, use state instead).
 
         Returns:
             Bond price P(t, T).
@@ -97,6 +118,24 @@ class HullWhite1F:
             raise ValueError("Bond maturity T must be >= current time t.")
         if t < 0.0 or T < 0.0:
             raise ValueError("Times must be non-negative.")
+
+        # Handle both new (state) and legacy (r_t) interfaces
+        if state is not None:
+            # New interface: state can be scalar or array, extract rate
+            if isinstance(state, np.ndarray):
+                if state.ndim == 0:
+                    rate = float(state)
+                elif state.ndim == 1 and len(state) == 1:
+                    rate = float(state[0])
+                else:
+                    raise ValueError(f"For 1-factor model, state must be scalar, got shape {state.shape}.")
+            else:
+                rate = float(state)
+        elif r_t is not None:
+            # Legacy interface
+            rate = float(r_t)
+        else:
+            raise ValueError("Either 'state' or 'r_t' must be provided.")
 
         tau = T - t
         if tau == 0.0:
@@ -118,20 +157,25 @@ class HullWhite1F:
             B * self._forward_rate_integral(t, T) - 0.5 * (sigma**2 / a**2) * (B - tau) * (1.0 - math.exp(-2.0 * a * t))
         )
 
-        return A * math.exp(-B * r_t)
+        return A * math.exp(-B * rate)
 
-    def discount_factor(self, t: float, T: float, r_t: float) -> float:
+    def discount_factor(
+        self, t: float, T: float, state: float | np.ndarray | None = None, *, r_t: float | None = None
+    ) -> float:
         """Calculate discount factor from time t to T.
+
+        Supports both protocol interface (state parameter) and legacy interface (r_t parameter).
 
         Args:
             t: Current time (years from valuation_date).
             T: Future time (years from valuation_date).
-            r_t: Short rate at time t.
+            state: Current state (short rate) at time t. For 1-factor model, this is a scalar.
+            r_t: Legacy parameter - short rate at time t (deprecated, use state instead).
 
         Returns:
             Discount factor D(t, T) = P(t, T).
         """
-        return self.bond_price(t, T, r_t)
+        return self.bond_price(t, T, state=state, r_t=r_t)
 
     # -------- Internal methods --------
 

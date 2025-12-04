@@ -14,6 +14,7 @@ from typing import Literal
 import numpy as np
 
 from montecarlo_ir.market_data.yield_curve import YieldCurve
+from montecarlo_ir.models.base import InterestRateModel  # noqa: F401 - Protocol for type checking
 from montecarlo_ir.utils.date_helpers import DayCountConvention, year_fraction
 
 DiscretizationScheme = Literal["euler", "log_euler"]
@@ -90,6 +91,21 @@ class LIBORMarketModel:
                     if i != j and abs(corr - self.correlation_matrix[j][i]) > 1e-10:
                         raise ValueError("correlation_matrix must be symmetric.")
 
+    def simulate_path(
+        self, times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Simulate forward LIBOR rates (InterestRateModel protocol).
+
+        Args:
+            times: Array of time points (years from valuation_date).
+            random_shocks: Optional array of random shocks (standard normal, shape: [n_times-1, n_rates]).
+                         If None, generates random shocks.
+
+        Returns:
+            Array of forward rates at each time point, shape [n_times, n_rates].
+        """
+        return self.simulate_forward_rates(times, random_shocks)
+
     def simulate_forward_rates(
         self, times: list[float] | np.ndarray, random_shocks: np.ndarray | None = None
     ) -> np.ndarray:
@@ -119,22 +135,43 @@ class LIBORMarketModel:
         else:
             return self._simulate_euler(times_array, initial_rates, random_shocks)
 
-    def discount_factor(self, t: float, T: float, forward_rates: np.ndarray) -> float:
+    def discount_factor(
+        self, t: float, T: float, state: float | np.ndarray | None = None, *, forward_rates: np.ndarray | None = None
+    ) -> float:
         """Calculate discount factor from time t to T using forward rates.
+
+        Supports both protocol interface (state parameter) and legacy interface (forward_rates parameter).
 
         Args:
             t: Current time (years from valuation_date).
             T: Future time (years from valuation_date).
-            forward_rates: Current forward rates at time t.
+            state: Current state (forward rates) at time t. Shape [n_rates].
+            forward_rates: Legacy parameter - current forward rates at time t (deprecated, use state instead).
 
         Returns:
             Discount factor D(t, T).
         """
         if T < t:
             raise ValueError("T must be >= t.")
-        if len(forward_rates) != len(self.tenor_structure) - 1:
+
+        # Handle both new (state) and legacy (forward_rates) interfaces
+        if state is not None:
+            # New interface: state should be forward rates array
+            if isinstance(state, np.ndarray):
+                rates = state
+            else:
+                # If scalar, convert to array (though LMM expects array)
+                rates = np.array([float(state)])
+        elif forward_rates is not None:
+            # Legacy interface
+            rates = np.asarray(forward_rates)
+        else:
+            raise ValueError("Either 'state' or 'forward_rates' must be provided.")
+
+        if len(rates) != len(self.tenor_structure) - 1:
             raise ValueError(
-                f"forward_rates must have length {len(self.tenor_structure) - 1}."
+                f"forward_rates/state must have length {len(self.tenor_structure) - 1}, "
+                f"got {len(rates)}."
             )
 
         # Find relevant tenors
@@ -155,9 +192,27 @@ class LIBORMarketModel:
 
             # Use forward rate for this period
             tau = year_fraction(T_i, T_i_plus, self.day_count)
-            df *= 1.0 / (1.0 + forward_rates[i] * tau)
+            df *= 1.0 / (1.0 + rates[i] * tau)
 
         return df
+
+    def bond_price(
+        self, t: float, T: float, state: float | np.ndarray | None = None, *, forward_rates: np.ndarray | None = None
+    ) -> float:
+        """Calculate bond price using forward rates (InterestRateModel protocol).
+
+        For LMM, bond price is calculated via discount factors from forward rates.
+
+        Args:
+            t: Current time (years from valuation_date).
+            T: Maturity time (years from valuation_date).
+            state: Current state (forward rates) at time t.
+            forward_rates: Legacy parameter (deprecated, use state instead).
+
+        Returns:
+            Bond price P(t, T) = D(t, T).
+        """
+        return self.discount_factor(t, T, state=state, forward_rates=forward_rates)
 
     # -------- Internal methods --------
 
